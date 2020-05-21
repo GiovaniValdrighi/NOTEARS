@@ -2,7 +2,7 @@ import numpy as np
 import scipy.linalg as slin
 import scipy.optimize as sopt
 
-def notears_linear(X, h_tol, threshold, lambda1, c = 0.25, rho_max = 1e16, max_iter = 100):
+def notears_linear(X,  lambda1, threshold = 0.01, h_tol = 1e-10, c = 0.25, rho_max = 1e16, max_iter = 100):
     '''
     Function that apply the NOTEARS algorithm in a linear model
     
@@ -23,9 +23,7 @@ def notears_linear(X, h_tol, threshold, lambda1, c = 0.25, rho_max = 1e16, max_i
         return (W[:n_variables*n_variables] - W[n_variables*n_variables:]).reshape([n_variables,n_variables])
 
     def _h(W):
-        '''
-        Acyclicity constraint value for the graph and gradient
-        '''
+        ''' Acyclicity constraint value for the graph and gradient '''
         #(Zheng et al. 2018 NOTEARS)
         # h(W) = tr[exp(W*W)] - n_variable
         #E = slin.expm(W*W)
@@ -39,29 +37,24 @@ def notears_linear(X, h_tol, threshold, lambda1, c = 0.25, rho_max = 1e16, max_i
         return h, G_h
 
     def _loss(W):
-        '''
-        Calculation of loss value and gradient
-        '''
-        y = np.matmul(X, W)
-        R = X - y
+        '''Calculation of loss value and gradient'''
+        R = X - np.matmul(X, W)
         # Mean squared error loss  : (1/2n)*(X - XW)^2
-        loss = ((R**2)/(2*n_samples)).sum()
+        loss = (R**2).sum()/(2*n_samples)
         G_loss = - np.matmul(X.T, R)/n_samples
         return loss, G_loss
 
-
     def _func(W):
-        '''
-        Evaluate value and gradient of augmented Lagrangian
-        '''
+        ''' Evaluate value and gradient of augmented Lagrangian '''
         W  = _adj(W)
         loss, G_loss = _loss(W)
         h, G_h = _h(W)
         #F(w) = L(W) + rho/2 * h² + alpha * h + lambda1*|W|
-        f = loss + 0.5 * rho * h**2 + alpha * h + lambda1 * np.abs(W).sum()
+        f = loss + 0.5 * rho * h**2 + alpha * h + lambda1 * W.sum()
         #dF/dW = dL/dW(W) + rho * h * dh/dW + alpha * dh/dW
         G_f = G_loss + (rho * h + alpha) * G_h
-        return f, G_f
+        g_obj = np.concatenate((G_f + lambda1, - G_f + lambda1), axis=None)
+        return f, g_obj
 
 
     ########################
@@ -70,13 +63,13 @@ def notears_linear(X, h_tol, threshold, lambda1, c = 0.25, rho_max = 1e16, max_i
 
     n_samples, n_variables = X.shape
     W_est, alpha, rho, h = np.zeros([ 2 * n_variables**2]), 0.0, 1.0, np.inf
-    bnd = np.array([(0, 0) if i == j else (0, np.inf) for _ in range(2) for i in range(n_variables) for j in range(n_variables)])
+    bnd = [(0, 0) if i == j else (0, None) for _ in range(2) for i in range(n_variables) for j in range(n_variables)]
     for _ in range(max_iter): 
         W_new, h_new = None, None
         while rho < rho_max:
             sol = sopt.minimize(_func, W_est, method = "L-BFGS-B", jac = True, bounds= bnd)
             W_new = sol.x
-            h_new, _ = _h(W_est)
+            h_new, _ = _h(_adj(W_new))
 
             #Updating rho constraint parameter
             if h_new > h*c:
@@ -86,7 +79,7 @@ def notears_linear(X, h_tol, threshold, lambda1, c = 0.25, rho_max = 1e16, max_i
         W_est, h = W_new, h_new
         
         #Ascent alpha
-        alpha = alpha + rho*h_new
+        alpha = alpha + rho*h
 
         #Verifying constraint tolerance
         if h <= h_tol or rho >= rho_max:
